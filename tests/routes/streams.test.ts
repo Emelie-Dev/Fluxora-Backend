@@ -53,6 +53,7 @@ import {
   setIdempotencyDependencyState,
 } from '../../src/routes/streams.js';
 import { initializeConfig } from '../../src/config/env.js';
+import { _resetFeatureFlagsForTest } from '../../src/config/featureFlags.js';
 import { generateToken } from '../../src/lib/auth.js';
 
 // Initialize config before importing anything that needs it
@@ -121,6 +122,9 @@ describe('streams routes', () => {
     _resetStreams();
     setStreamListingDependencyState('healthy');
     setIdempotencyDependencyState('healthy');
+    delete process.env.FEATURE_FLAGS_JSON;
+    delete process.env.FEATURE_FLAGS_FILE;
+    _resetFeatureFlagsForTest();
 
     mockFindWithCursor.mockResolvedValue({ streams: [], hasMore: false });
     mockGetById.mockResolvedValue(undefined);
@@ -134,6 +138,9 @@ describe('streams routes', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    delete process.env.FEATURE_FLAGS_JSON;
+    delete process.env.FEATURE_FLAGS_FILE;
+    _resetFeatureFlagsForTest();
   });
 
   // ── GET /api/streams ──────────────────────────────────────────────────────
@@ -156,6 +163,21 @@ describe('streams routes', () => {
       expect(s.sender).toBe(VALID_SENDER);
       expect(s.depositAmount).toBe('1000');
       expect(s.ratePerSecond).toBe('10');
+      expect(s.streamedAmount).toBeUndefined();
+      expect(s.remainingAmount).toBeUndefined();
+    });
+
+    it('includes rollout-gated balance fields when the requester is enabled', async () => {
+      process.env.FEATURE_FLAGS_JSON = '{"streams.response_balances":{"enabled":true,"percentage":100}}';
+      mockFindWithCursor.mockResolvedValue({ streams: [makeDbRecord()], hasMore: false });
+
+      const res = await request(app)
+        .get('/api/streams')
+        .set('x-api-key', 'test-api-key');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.streams[0].streamedAmount).toBe('0');
+      expect(res.body.data.streams[0].remainingAmount).toBe('1000');
     });
 
     it('includes next_cursor when hasMore=true', async () => {
@@ -230,6 +252,19 @@ describe('streams routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.stream.id).toBe('stream-abc-0');
       expect(res.body.data.stream.depositAmount).toBe('1000');
+    });
+
+    it('keeps rollout-gated balance fields hidden when the requester is outside rollout', async () => {
+      process.env.FEATURE_FLAGS_JSON = '{"streams.response_balances":{"enabled":true,"percentage":0}}';
+      mockGetById.mockResolvedValue(makeDbRecord({ id: 'stream-abc-0' }));
+
+      const res = await request(app)
+        .get('/api/streams/stream-abc-0')
+        .set('x-api-key', 'test-api-key');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.stream.streamedAmount).toBeUndefined();
+      expect(res.body.data.stream.remainingAmount).toBeUndefined();
     });
 
     it('maps DB snake_case to API camelCase', async () => {

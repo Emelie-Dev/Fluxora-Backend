@@ -47,7 +47,7 @@
  * @module routes/streams
  */
 import { Router } from 'express';
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import crypto from 'crypto';
 import {
   validateDecimalString,
@@ -77,6 +77,7 @@ import { PaginationSchema } from '../validation/paginationSchema.js';
 import type { StreamStatus, StreamFilter } from '../db/types.js';
 import { isTerminalStatus } from '../streams/status.js';
 import { streamsCreatedTotal } from '../metrics/businessMetrics.js';
+import { isFeatureEnabled } from '../config/featureFlags.js';
 import {
   RedisIdempotencyStore,
   NoOpIdempotencyStore,
@@ -98,6 +99,8 @@ export interface Stream {
   startTime: number;
   endTime: number;
   status: string;
+  streamedAmount?: string;
+  remainingAmount?: string;
 }
 
 type StreamsCursor = { v: 1; lastId: string };
@@ -113,6 +116,7 @@ type NormalizedCreateInput = {
 };
 
 const AMOUNT_FIELDS = ['depositAmount', 'ratePerSecond'] as const;
+const STREAM_RESPONSE_BALANCES_FLAG = 'streams.response_balances';
 
 // ── Dependency state (injectable for tests) ───────────────────────────────────
 
@@ -172,8 +176,16 @@ export function setIdempotencyStore(
  */
 import type { StreamRecord } from '../db/types.js';
 
-function toApiStream(record: StreamRecord): Stream {
+function getRequesterKey(req: Request): { apiKey?: string; ip?: string } {
+  const apiKeyHeader = req.header('x-api-key') ?? req.header('api-key');
   return {
+    apiKey: apiKeyHeader,
+    ip: req.ip,
+  };
+}
+
+function toApiStream(record: StreamRecord, includeBalances = false): Stream {
+  const stream: Stream = {
     id:            record.id,
     sender:        record.sender_address,
     recipient:     record.recipient_address,
@@ -183,6 +195,13 @@ function toApiStream(record: StreamRecord): Stream {
     endTime:       record.end_time,
     status:        record.status,
   };
+
+  if (includeBalances) {
+    stream.streamedAmount = record.streamed_amount;
+    stream.remainingAmount = record.remaining_amount;
+  }
+
+  return stream;
 }
 
 // ── Cursor helpers ────────────────────────────────────────────────────────────
@@ -389,6 +408,8 @@ streamsRouter.get(
       throw serviceUnavailable('Stream list is temporarily unavailable. Retry when dependency health is restored.');
     }
 
+    const includeBalances = isFeatureEnabled(STREAM_RESPONSE_BALANCES_FLAG, getRequesterKey(req));
+
     let result: { streams: Stream[]; hasMore: boolean; total?: number };
     try {
       const filter: StreamFilter = {};
@@ -402,7 +423,7 @@ streamsRouter.get(
         includeTotal,
       );
       result = {
-        streams: dbResult.streams.map(toApiStream),
+        streams: dbResult.streams.map((record) => toApiStream(record, includeBalances)),
         hasMore: dbResult.hasMore,
         ...(dbResult.total !== undefined ? { total: dbResult.total } : {}),
       };
@@ -463,7 +484,8 @@ streamsRouter.get(
     }
 
     if (!record) throw notFound('Stream', id);
-    const stream = toApiStream(record!);
+    const includeBalances = isFeatureEnabled(STREAM_RESPONSE_BALANCES_FLAG, getRequesterKey(req));
+    const stream = toApiStream(record!, includeBalances);
     res.set(
       'Cache-Control',
       isTerminalStatus(stream.status as ApiStreamStatus)

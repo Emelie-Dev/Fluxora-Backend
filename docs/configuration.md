@@ -65,6 +65,8 @@ Secret values are never included in validation messages.
 | `INDEXER_LAST_SUCCESSFUL_SYNC_AT` | string | unset |
 | `DEPLOYMENT_CHECKLIST_VERSION` | string | `2026-03-27` |
 | `ADMIN_STATE_FILE` | path string | unset |
+| `FEATURE_FLAGS_JSON` | JSON object | unset |
+| `FEATURE_FLAGS_FILE` | path string | unset |
 | `RPC_CB_FAILURE_THRESHOLD` | integer | `5` |
 | `RPC_CB_WINDOW_MS` | integer ms | `30000` |
 | `RPC_CB_RESET_TIMEOUT_MS` | integer ms | `60000` |
@@ -83,3 +85,50 @@ Secret values are never included in validation messages.
 | `FLUXORA_SHUTDOWN` | boolean | unset; internal graceful shutdown flag |
 
 Booleans accept `true`, `false`, `1`, and `0`.
+
+## Feature flags
+
+Fluxora supports percentage rollout flags through `src/config/featureFlags.ts`.
+Use `FEATURE_FLAGS_JSON` for inline configuration, or `FEATURE_FLAGS_FILE` for
+a JSON file that can be edited without restarting the service. When both are
+set, `FEATURE_FLAGS_JSON` wins.
+
+Example:
+
+```json
+{
+  "streams.response_balances": {
+    "enabled": true,
+    "percentage": 25
+  }
+}
+```
+
+Boolean shorthand is also valid:
+
+```json
+{
+  "streams.response_balances": true
+}
+```
+
+Rollout decisions are deterministic per flag and requester. The service hashes
+`flagName:requesterKey` with SHA-256 and maps it to a bucket from 0 to 9999.
+The streams routes use the API key as the requester key when present, falling
+back to the request IP. The raw requester key is not logged or persisted by the
+flag evaluator.
+
+Current stream flag:
+
+| Flag | Effect |
+| --- | --- |
+| `streams.response_balances` | Adds `streamedAmount` and `remainingAmount` to stream read responses for enabled requesters. |
+
+Security notes:
+
+- Keep flag names non-sensitive; configuration validation allows letters,
+  numbers, `.`, `:`, `_`, and `-`.
+- Do not put secrets in flag values. The flag service only accepts booleans or
+  `{ "enabled": boolean, "percentage": number }` definitions.
+- Prefer `FEATURE_FLAGS_FILE` for live percentage changes. The file is re-read
+  when its modification time changes.
