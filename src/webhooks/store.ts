@@ -50,22 +50,22 @@
  *
  * ### Idempotency and Crash Recovery (The Send/Ack Window)
  *
- * Both outbox implementations (management routes and stream dispatcher) are 
- * subject to a "send/ack crash window". If the process crashes after sending the 
+ * Both outbox implementations (management routes and stream dispatcher) are
+ * subject to a "send/ack crash window". If the process crashes after sending the
  * HTTP network request but before committing the acknowledgement to the database:
- * 
- * 1. **Delivery Identity**: The `x-fluxora-delivery-id` header (and the `deliveryId` field) 
+ *
+ * 1. **Delivery Identity**: The `x-fluxora-delivery-id` header (and the `deliveryId` field)
  *    serves as the primary idempotency key.
- * 2. **Receiver Deduplication**: Receivers *must* deduplicate based on this identity. 
+ * 2. **Receiver Deduplication**: Receivers *must* deduplicate based on this identity.
  *    Duplicate sends are an expected byproduct of at-least-once delivery guarantees.
- * 3. **Retryability**: 
- *    - In `WebhookDeliveryStore` / `PgWebhookDeliveryStore`: an in-flight row becomes 
+ * 3. **Retryability**:
+ *    - In `WebhookDeliveryStore` / `PgWebhookDeliveryStore`: an in-flight row becomes
  *      retryable when its lock expires (`lockedAt + lockTimeoutMs < now`).
- *    - In `WebhookDispatcher`: an outbox row becomes retryable immediately upon 
+ *    - In `WebhookDispatcher`: an outbox row becomes retryable immediately upon
  *      transaction rollback (the `FOR UPDATE SKIP LOCKED` is released).
- * 4. **Signature Reuse Policy**: A crashed attempt is not recorded. The subsequent 
- *    retry will be treated as the same attempt number as the crashed one, but will 
- *    feature a *fresh* timestamp and a newly computed signature. Signatures are 
+ * 4. **Signature Reuse Policy**: A crashed attempt is not recorded. The subsequent
+ *    retry will be treated as the same attempt number as the crashed one, but will
+ *    feature a *fresh* timestamp and a newly computed signature. Signatures are
  *    never cached or reused across attempts.
  */
 
@@ -139,14 +139,24 @@ export interface IWebhookDeliveryStore {
   reclaimStuckItems(opts?: ClaimOptions): OutboxItem[];
   releaseOutboxItem(id: string, workerId: string): boolean;
   markOutboxItemDelivered(id: string, workerId: string): boolean;
-  addToDeadLetterQueue(delivery: WebhookDelivery, failureReason: string, reasonCode?: DLQReasonCode): string;
-  getDeadLetterQueueItems(limit?: number): DeadLetterQueueItem[];
+  addToDeadLetterQueue(
+    delivery: WebhookDelivery,
+    failureReason: string,
+    reasonCode?: DLQReasonCode
+  ): string;
+  getDeadLetterQueueItems(limit?: number, offset?: number): DeadLetterQueueItem[];
   processDeadLetterQueueItem(id: string, processedAt?: number): boolean;
   getPendingRetries(now?: number): WebhookDelivery[];
   getByEventId(eventId: string): WebhookDelivery[];
   registerDeliveryId(deliveryId: string): void;
   isDuplicateDelivery(deliveryId: string): boolean;
-  getMetrics(): { totalDeliveries: number; successfulDeliveries: number; failedDeliveries: number; dlqItems: number; outboxItems: number };
+  getMetrics(): {
+    totalDeliveries: number;
+    successfulDeliveries: number;
+    failedDeliveries: number;
+    dlqItems: number;
+    outboxItems: number;
+  };
   cleanup(olderThanMs?: number): { cleaned: number; errors: string[] };
   clear(): void;
   getAll(): WebhookDelivery[];
@@ -307,10 +317,11 @@ export class WebhookDeliveryStore implements IWebhookDeliveryStore {
     for (const priority of priorities) {
       const items = this.outboxPriorityQueue.get(priority) || [];
       const ready = items
-        .filter((item) =>
-          item.status === 'pending' &&
-          item.scheduledFor <= now &&
-          item.attempts < item.maxAttempts
+        .filter(
+          (item) =>
+            item.status === 'pending' &&
+            item.scheduledFor <= now &&
+            item.attempts < item.maxAttempts
         )
         .sort((a, b) => a.scheduledFor - b.scheduledFor);
       readyItems.push(...ready);
@@ -380,9 +391,8 @@ export class WebhookDeliveryStore implements IWebhookDeliveryStore {
 
         // Claim eligible items: pending or stuck in_flight with expired lock
         const isPending = item.status === 'pending' && item.scheduledFor <= now;
-        const isStuck = item.status === 'in_flight' &&
-          item.lockedAt != null &&
-          item.lockedAt < reclaimWindow;
+        const isStuck =
+          item.status === 'in_flight' && item.lockedAt != null && item.lockedAt < reclaimWindow;
 
         if (!isPending && !isStuck) continue;
 
@@ -414,11 +424,7 @@ export class WebhookDeliveryStore implements IWebhookDeliveryStore {
     const reclaimed: OutboxItem[] = [];
 
     for (const item of this.outbox.values()) {
-      if (
-        item.status === 'in_flight' &&
-        item.lockedAt != null &&
-        item.lockedAt < reclaimWindow
-      ) {
+      if (item.status === 'in_flight' && item.lockedAt != null && item.lockedAt < reclaimWindow) {
         item.status = 'in_flight';
         item.lockedAt = now;
         item.lockedBy = workerId;
@@ -522,9 +528,9 @@ export class WebhookDeliveryStore implements IWebhookDeliveryStore {
   /**
    * Get items from dead-letter queue
    */
-  getDeadLetterQueueItems(limit?: number): DeadLetterQueueItem[] {
+  getDeadLetterQueueItems(limit?: number, offset = 0): DeadLetterQueueItem[] {
     const items = Array.from(this.deadLetterQueue.values());
-    return limit ? items.slice(0, limit) : items;
+    return limit ? items.slice(offset, offset + limit) : items.slice(offset);
   }
 
   /**

@@ -283,10 +283,7 @@ export class PgWebhookDeliveryStore implements IWebhookDeliveryStore {
     const removed = this.mirror.removeFromOutbox(id);
     if (removed) {
       this.persistAsync(
-        this.pool.query(
-          `UPDATE webhook_outbox_items SET status = 'delivered' WHERE id = $1`,
-          [id]
-        ),
+        this.pool.query(`UPDATE webhook_outbox_items SET status = 'delivered' WHERE id = $1`, [id]),
         'outbox remove'
       );
     }
@@ -296,10 +293,10 @@ export class PgWebhookDeliveryStore implements IWebhookDeliveryStore {
   updateOutboxItemAttempt(id: string, attempts: number): void {
     this.mirror.updateOutboxItemAttempt(id, attempts);
     this.persistAsync(
-      this.pool.query(
-        `UPDATE webhook_outbox_items SET attempts = $1 WHERE id = $2`,
-        [attempts, id]
-      ),
+      this.pool.query(`UPDATE webhook_outbox_items SET attempts = $1 WHERE id = $2`, [
+        attempts,
+        id,
+      ]),
       'outbox attempt update'
     );
   }
@@ -388,18 +385,15 @@ export class PgWebhookDeliveryStore implements IWebhookDeliveryStore {
     return id;
   }
 
-  getDeadLetterQueueItems(limit?: number): DeadLetterQueueItem[] {
-    return this.mirror.getDeadLetterQueueItems(limit);
+  getDeadLetterQueueItems(limit?: number, offset?: number): DeadLetterQueueItem[] {
+    return this.mirror.getDeadLetterQueueItems(limit, offset);
   }
 
   processDeadLetterQueueItem(id: string, processedAt?: number): boolean {
     const processed = this.mirror.processDeadLetterQueueItem(id, processedAt);
     if (processed) {
       this.persistAsync(
-        this.pool.query(
-          `UPDATE webhook_dlq SET processed_at = NOW() WHERE id = $1`,
-          [id]
-        ),
+        this.pool.query(`UPDATE webhook_dlq SET processed_at = NOW() WHERE id = $1`, [id]),
         'dlq process'
       );
     }
@@ -422,7 +416,13 @@ export class PgWebhookDeliveryStore implements IWebhookDeliveryStore {
     return this.mirror.isDuplicateDelivery(deliveryId);
   }
 
-  getMetrics(): { totalDeliveries: number; successfulDeliveries: number; failedDeliveries: number; dlqItems: number; outboxItems: number } {
+  getMetrics(): {
+    totalDeliveries: number;
+    successfulDeliveries: number;
+    failedDeliveries: number;
+    dlqItems: number;
+    outboxItems: number;
+  } {
     return this.mirror.getMetrics();
   }
 
